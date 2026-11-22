@@ -9,13 +9,15 @@ app/
   api/routes/       Versioned users, predictions, and results endpoints
   core/             Environment configuration, Firebase Admin, token security
   dependencies/     Verified Firebase ID token dependency
-  models/           Disease TFLite classifier and separate chilli validator
+  models/           Disease classifier and leaf-validation model artifacts
   schemas/          Pydantic request and response contracts
   services/         Prediction workflow, image validation, Firebase persistence
   utils/            Safe image decoding and domain exceptions
 ```
 
 The bundled six-class disease model is `models/chilli_leaf_disease_final.tflite` (1.70 MB); its matching class order is in `models/class_names.json`. Inspection of the TFLite flatbuffer confirms a float32 `[1, 128, 128, 3]` input and six outputs. The inference implementation currently converts to RGB, resizes bilinearly to 128 × 128, and divides by 255. The checked-in training script does not document this exact artifact: it builds a 224 × 224 MobileNetV2 while the bundled model has a different shape and operator graph, and it applies rescaling in both its data generator and model. The original training artifact/data are absent, so input normalization cannot be independently verified from the repository. Do not treat normalization as confirmed until the model owner supplies the exact export/training pipeline or a validated reference inference.
+
+`/app/models/leaf_detection.tflite` is downloaded from a pinned revision of [kd8811/TeaLeafNet](https://huggingface.co/kd8811/TeaLeafNet) during the Docker build; the build verifies the downloaded file hash. Its model card describes a 160 × 160 RGB tea-leaf versus non-leaf model whose score is below 0.5 for leaf images. It has not been validated on chilli photos, and its score direction needs explicit handling before enabling it. Production keeps `IMAGE_VALIDATION_REQUIRED=false`; this artifact is not currently loaded by the API. The Hugging Face model page declares Apache-2.0.
 
 Chilli identity validation is a separate optional model stage. The repository currently does **not** contain a chilli-versus-other-plant validator model. By default, `IMAGE_VALIDATION_REQUIRED=true` requires a separately trained TFLite validator configured with `IMAGE_VALIDATION_MODEL_PATH`; set its chilli-positive output index and verify its preprocessing against its training code. Production temporarily sets `IMAGE_VALIDATION_REQUIRED=false`, allowing disease classification without the identity gate. Scans made in this mode are stored with `validation_status=validation_disabled`; the six-class disease model may still assign a disease label to a non-chilli image.
 
