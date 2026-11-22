@@ -135,15 +135,18 @@ jobs:
             "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
 
       - name: Deploy containers
+        env:
+          IMAGE_VALIDATION_MODEL_PATH: ${{ secrets.IMAGE_VALIDATION_MODEL_PATH }}
         run: |
           set -euo pipefail
           ALLOWED_ORIGINS_B64="$(printf '%s' "$ALLOWED_ORIGINS" | base64 -w0)"
+          IMAGE_VALIDATION_MODEL_PATH_B64="$(printf '%s' "$IMAGE_VALIDATION_MODEL_PATH" | base64 -w0)"
           ssh -i "$EC2_KEY_PATH" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
             "$EC2_USER@$EC2_HOST" \
-            "IMAGE_REF='$IMAGE_REF' ALLOWED_ORIGINS_B64='$ALLOWED_ORIGINS_B64' bash /opt/chilli-plant-api/deploy-ec2.sh"
+            "IMAGE_REF='$IMAGE_REF' ALLOWED_ORIGINS_B64='$ALLOWED_ORIGINS_B64' IMAGE_VALIDATION_MODEL_PATH_B64='$IMAGE_VALIDATION_MODEL_PATH_B64' bash /opt/chilli-plant-api/deploy-ec2.sh"
 
       - name: Check public HTTPS endpoint
         run: |
