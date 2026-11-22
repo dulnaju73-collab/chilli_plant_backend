@@ -6,6 +6,8 @@
 !.env.example
 *.json.key
 *service-account*.json
+*service*Account*.json
+*Service*Account*.json
 firebase-adminsdk-*.json
 .venv
 venv

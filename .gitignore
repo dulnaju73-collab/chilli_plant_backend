@@ -6,6 +6,8 @@
 *.p12
 *.pfx
 *service-account*.json
+*service*Account*.json
+*Service*Account*.json
 firebase-adminsdk-*.json
 .venv/
 venv/
