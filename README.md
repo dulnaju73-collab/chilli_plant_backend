@@ -104,7 +104,7 @@ Before the first workflow run:
 
 For a Flutter Web client, set the optional repository variable `ALLOWED_ORIGINS` to a comma-separated list of exact browser origins, including ports, such as `https://app.example.com,http://localhost:8080`.
 
-Caddy uses a short-lived Let's Encrypt IP certificate and renews it automatically. The health check also requires Firebase Admin and the bundled disease model to load. This instance is a `t3.micro` with about 1 GB RAM; the TensorFlow runtime has not been measured at that size, so use at least a 2 GB instance if the model container is killed or becomes unstable.
+Caddy uses a short-lived Let's Encrypt IP certificate and renews it automatically. The health check also requires Firebase Admin and the bundled disease model to load. The production deploy currently leaves `FIREBASE_STORAGE_BUCKET` unset because the configured bucket was not found. Predictions are saved to Firestore without retaining the uploaded image until a valid bucket is configured. This instance is a `t3.micro` with about 1 GB RAM; the TensorFlow runtime has not been measured at that size, so use at least a 2 GB instance if the model container is killed or becomes unstable.
 
 The repository contains the six-class disease model, but no separate chilli-versus-other-plant validator model. Set `IMAGE_VALIDATION_REQUIRED=false` to temporarily skip the gate, or configure `IMAGE_VALIDATION_MODEL_PATH` with a dedicated validator and set the requirement back to true.
 

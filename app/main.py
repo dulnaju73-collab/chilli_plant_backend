@@ -75,6 +75,7 @@ def health() -> dict[str, Any]:
         "validator_ready": validator is not None,
         "image_validation_required": settings.image_validation_required,
         "firebase_ready": firebase.ready,
+        "image_storage_enabled": firebase.storage_bucket is not None,
         "disease_model": settings.model_path.name,
         "model_version": settings.model_version,
         "classes": ["Bacterial Spot", "Cercospora Leaf Spot", "Curl Virus", "Healthy Leaf", "Nutrition Deficiency", "White Spot"],

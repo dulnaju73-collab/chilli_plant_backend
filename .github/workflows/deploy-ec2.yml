@@ -23,7 +23,6 @@ jobs:
       EC2_HOST: 16.178.139.98
       EC2_USER: ec2-user
       FIREBASE_PROJECT_ID: flutterchilli
-      FIREBASE_STORAGE_BUCKET: flutterchilli.firebasestorage.app
       ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
       IMAGE_REF: ghcr.io/${{ github.repository }}:${{ github.sha }}
 

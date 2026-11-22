@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.firebase import FirebaseUnavailable, firebase
 from app.schemas.results import ScanResult
+
+logger = logging.getLogger(__name__)
 
 
 def _normalise_result(uid: str, snapshot: Any) -> ScanResult:
@@ -81,7 +84,11 @@ class FirebaseService:
             image_path = f"users/{uid}/scans/{scan_id}.{extension}"
             blob = clients.storage_bucket.blob(image_path)
             content_type = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}[image_format]
-            blob.upload_from_string(image_data, content_type=content_type)
+            try:
+                blob.upload_from_string(image_data, content_type=content_type)
+            except Exception:
+                logger.exception("Firebase Storage upload failed for scan %s", scan_id)
+                raise
         ref = self._profile_ref(uid).collection("scans").document(scan_id)
         try:
             ref.set({
@@ -96,7 +103,11 @@ class FirebaseService:
             })
         except Exception:
             if image_path and clients.storage_bucket is not None:
-                clients.storage_bucket.blob(image_path).delete()
+                try:
+                    clients.storage_bucket.blob(image_path).delete()
+                except Exception:
+                    logger.exception("Could not remove image after Firestore failed for scan %s", scan_id)
+            logger.exception("Firestore failed to save scan %s", scan_id)
             raise
         return {"id": scan_id, "disease": disease, "confidence": round(confidence * 100, 2), "is_healthy": disease == "Healthy_Leaf", "image_url": image_url, "image_path": image_path, "validation_status": validation_status, "created_at": datetime.now(timezone.utc)}
 

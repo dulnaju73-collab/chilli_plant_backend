@@ -31,7 +31,6 @@ docker rm -f chilli-api >/dev/null 2>&1 || true
 api_env=(
     --env PORT=8000
     --env FIREBASE_PROJECT_ID=flutterchilli
-    --env FIREBASE_STORAGE_BUCKET=flutterchilli.firebasestorage.app
     --env FIREBASE_SERVICE_ACCOUNT_PATH=/run/secrets/firebase-service-account.json
     --env MODEL_PATH=/app/models/chilli_leaf_disease_final.tflite
     --env LABELS_PATH=/app/models/class_names.json
