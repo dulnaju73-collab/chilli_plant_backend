@@ -90,6 +90,24 @@ def test_profile_and_history_use_verified_uid(client, monkeypatch):
     assert captured["date"].date() == date(2026, 10, 7)
 
 
+def test_profile_update_uses_authenticated_uid(client, monkeypatch):
+    from app.api.routes import users
+
+    captured = {}
+
+    class FakeUsers:
+        def update_profile(self, uid, username):
+            captured.update(uid=uid, username=username)
+            return {"uid": uid, "username": username, "email": "user@example.com"}
+
+    monkeypatch.setattr(users, "service", FakeUsers())
+    main_module.app.dependency_overrides[current_user] = lambda: {"uid": "verified-user"}
+    response = client.put("/api/v1/users/me", json={"username": "pepper-grower"})
+    assert response.status_code == 200
+    assert response.json()["username"] == "pepper-grower"
+    assert captured == {"uid": "verified-user", "username": "pepper-grower"}
+
+
 def test_results_filters_and_pagination_are_forwarded(client, monkeypatch):
     from app.api.routes import results
 
@@ -128,6 +146,52 @@ def test_unauthorized_user_cannot_delete_another_user_result(client, monkeypatch
     response = client.delete("/api/v1/results/other-users-scan")
     assert response.status_code == 404
     assert captured == {"uid": "current-user", "result_id": "other-users-scan"}
+
+
+def test_result_detail_and_delete_are_scoped_to_authenticated_uid(client, monkeypatch):
+    from app.api.routes import results
+    from app.schemas.results import ScanResult
+
+    captured = []
+
+    class FakeResults:
+        def get_result(self, uid, result_id):
+            captured.append(("get", uid, result_id))
+            return ScanResult(
+                id=result_id,
+                disease="Healthy_Leaf",
+                confidence=92.5,
+                is_healthy=True,
+                validation_status="validated",
+                prediction_model_version="model-v1",
+            )
+
+        def delete_result(self, uid, result_id):
+            captured.append(("delete", uid, result_id))
+            return True
+
+    monkeypatch.setattr(results, "service", FakeResults())
+    main_module.app.dependency_overrides[current_user] = lambda: {"uid": "owner-uid"}
+    detail = client.get("/api/v1/results/scan-7")
+    deleted = client.delete("/api/v1/results/scan-7")
+    assert detail.status_code == 200
+    assert detail.json()["id"] == "scan-7"
+    assert deleted.status_code == 204
+    assert captured == [("get", "owner-uid", "scan-7"), ("delete", "owner-uid", "scan-7")]
+
+
+def test_history_returns_service_unavailable_when_firebase_fails(client, monkeypatch):
+    from app.api.routes import results
+    from app.core.firebase import FirebaseUnavailable
+
+    class BrokenResults:
+        def list_results(self, *_args, **_kwargs):
+            raise FirebaseUnavailable("Firebase is unavailable.")
+
+    monkeypatch.setattr(results, "service", BrokenResults())
+    main_module.app.dependency_overrides[current_user] = lambda: {"uid": "verified-user"}
+    response = client.get("/api/v1/results")
+    assert response.status_code == 503
 
 
 def test_non_chilli_validation_stops_disease_inference():
