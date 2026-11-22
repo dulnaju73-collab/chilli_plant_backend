@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: chilli-plant-api
+    runtime: docker
+    plan: 1c-2g
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: FIREBASE_PROJECT_ID
+        value: flutterchilli-5bab2
+      - key: FIREBASE_STORAGE_BUCKET
+        value: flutterchilli-5bab2.firebasestorage.app
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: MODEL_PATH
+        value: /app/models/chilli_leaf_disease_final.tflite
+      - key: LABELS_PATH
+        value: /app/models/class_names.json
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "10"
+      - key: ALLOWED_ORIGINS
+        value: ""
