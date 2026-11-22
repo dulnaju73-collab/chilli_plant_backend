@@ -35,6 +35,8 @@ class PredictionService:
             scans.append(now)
 
     def validate(self, image: Any) -> ValidationResponse:
+        if not settings.image_validation_required:
+            return ValidationResponse(valid=True, message="Chilli image validation is temporarily disabled. Disease classification will continue.")
         try:
             valid, confidence = self.validator.validate(image)
         except ValidatorUnavailable:
@@ -46,19 +48,22 @@ class PredictionService:
 
     def analyze(self, uid: str, image_data: bytes, image: Any, image_format: str) -> dict[str, Any]:
         self.check_rate_limit(uid, "analyze")
-        try:
-            valid, _ = self.validator.validate(image)
-        except ValidatorUnavailable:
-            raise
-        except Exception as exc:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=503, detail="The chilli image validator failed. Disease classification was not run.") from exc
-        if not valid:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=422, detail={
-                "code": "INVALID_PLANT_IMAGE",
-                "message": "The uploaded image does not appear to contain a chilli plant. Please upload a clear chilli leaf image.",
-            })
+        validation_status = "validation_disabled"
+        if settings.image_validation_required:
+            try:
+                valid, _ = self.validator.validate(image)
+            except ValidatorUnavailable:
+                raise
+            except Exception as exc:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=503, detail="The chilli image validator failed. Disease classification was not run.") from exc
+            if not valid:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=422, detail={
+                    "code": "INVALID_PLANT_IMAGE",
+                    "message": "The uploaded image does not appear to contain a chilli plant. Please upload a clear chilli leaf image.",
+                })
+            validation_status = "validated"
         if self.classifier is None:
             from fastapi import HTTPException
             raise HTTPException(status_code=503, detail="Disease model is unavailable. Configure MODEL_PATH and install the backend model dependencies.")
@@ -68,7 +73,7 @@ class PredictionService:
             from fastapi import HTTPException
             raise HTTPException(status_code=500, detail="Disease classification failed. Please try a different clear image.") from exc
         try:
-            result = self.firebase_service.save_scan(uid, disease, confidence, image_data, image_format, settings.model_version)
+            result = self.firebase_service.save_scan(uid, disease, confidence, image_data, image_format, settings.model_version, validation_status)
         except FirebaseUnavailable as exc:
             from fastapi import HTTPException
             raise HTTPException(status_code=503, detail=str(exc)) from exc

@@ -19,6 +19,13 @@ def _csv_env(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(item.strip() for item in os.getenv(name, default).split(",") if item.strip())
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     firebase_project_id: str | None = os.getenv("FIREBASE_PROJECT_ID") or None
@@ -28,6 +35,7 @@ class Settings:
     model_path: Path = Path(os.getenv("MODEL_PATH", str(BASE_DIR / "models/chilli_leaf_disease_final.tflite")))
     labels_path: Path = Path(os.getenv("LABELS_PATH", str(BASE_DIR / "models/class_names.json")))
     validator_model_path: Path | None = Path(os.environ["IMAGE_VALIDATION_MODEL_PATH"]) if os.getenv("IMAGE_VALIDATION_MODEL_PATH") else None
+    image_validation_required: bool = _bool_env("IMAGE_VALIDATION_REQUIRED", True)
     validator_positive_class_index: int = int(os.getenv("IMAGE_VALIDATION_POSITIVE_CLASS_INDEX", "1"))
     validator_threshold: float = float(os.getenv("IMAGE_VALIDATION_THRESHOLD", "0.70"))
     max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10")) * 1024 * 1024

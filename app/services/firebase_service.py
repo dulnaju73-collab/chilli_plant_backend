@@ -71,7 +71,7 @@ class FirebaseService:
             created_at = created_at.to_datetime() if hasattr(created_at, "to_datetime") else None
         return {"uid": uid, "username": profile.get("username", username.strip()), "email": profile.get("email"), "created_at": created_at}
 
-    def save_scan(self, uid: str, disease: str, confidence: float, image_data: bytes, image_format: str, model_version: str) -> dict[str, Any]:
+    def save_scan(self, uid: str, disease: str, confidence: float, image_data: bytes, image_format: str, model_version: str, validation_status: str = "validated") -> dict[str, Any]:
         clients = self.clients.require()
         scan_id = uuid.uuid4().hex
         image_path = None
@@ -90,7 +90,7 @@ class FirebaseService:
                 "is_healthy": disease == "Healthy_Leaf",
                 "image_url": image_url,
                 "image_path": image_path,
-                "validation_status": "validated",
+                "validation_status": validation_status,
                 "created_at": clients.firestore_sdk.SERVER_TIMESTAMP,
                 "prediction_model_version": model_version,
             })
@@ -98,7 +98,7 @@ class FirebaseService:
             if image_path and clients.storage_bucket is not None:
                 clients.storage_bucket.blob(image_path).delete()
             raise
-        return {"id": scan_id, "disease": disease, "confidence": round(confidence * 100, 2), "is_healthy": disease == "Healthy_Leaf", "image_url": image_url, "image_path": image_path, "validation_status": "validated", "created_at": datetime.now(timezone.utc)}
+        return {"id": scan_id, "disease": disease, "confidence": round(confidence * 100, 2), "is_healthy": disease == "Healthy_Leaf", "image_url": image_url, "image_path": image_path, "validation_status": validation_status, "created_at": datetime.now(timezone.utc)}
 
     def _query(self, uid: str, disease: str | None = None, diseases: list[str] | None = None, start: datetime | None = None, end: datetime | None = None) -> Any:
         query = self._profile_ref(uid).collection("scans")

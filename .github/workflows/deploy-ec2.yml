@@ -171,6 +171,6 @@ jobs:
           print(json.dumps(health, indent=2))
           if not health.get("disease_model_ready") or not health.get("firebase_ready"):
               raise SystemExit("The API is up, but the disease model or Firebase Admin is not ready.")
-          if not health.get("validator_ready"):
+          if health.get("image_validation_required", True) and not health.get("validator_ready"):
               print("Warning: the separate chilli validator model is not configured; analyze/validate endpoints will return 503.")
           PY

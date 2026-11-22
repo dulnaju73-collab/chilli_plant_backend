@@ -35,6 +35,7 @@ api_env=(
     --env FIREBASE_SERVICE_ACCOUNT_PATH=/run/secrets/firebase-service-account.json
     --env MODEL_PATH=/app/models/chilli_leaf_disease_final.tflite
     --env LABELS_PATH=/app/models/class_names.json
+    --env IMAGE_VALIDATION_REQUIRED=false
     --env "ALLOWED_ORIGINS=$ALLOWED_ORIGINS"
 )
 if [[ -n "$IMAGE_VALIDATION_MODEL_PATH" ]]; then
