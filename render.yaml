@@ -13,9 +13,9 @@ services:
       - key: PORT
         value: "10000"
       - key: FIREBASE_PROJECT_ID
-        value: flutterchilli-5bab2
+        value: flutterchilli
       - key: FIREBASE_STORAGE_BUCKET
-        value: flutterchilli-5bab2.firebasestorage.app
+        value: flutterchilli.firebasestorage.app
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: MODEL_PATH

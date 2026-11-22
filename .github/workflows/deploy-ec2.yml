@@ -1,0 +1,173 @@
+name: Deploy Chilli API to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chilli-api-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    env:
+      EC2_HOST: 16.178.139.98
+      EC2_USER: ec2-user
+      FIREBASE_PROJECT_ID: flutterchilli
+      FIREBASE_STORAGE_BUCKET: flutterchilli.firebasestorage.app
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+      IMAGE_REF: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@v6
+
+      - name: Check deployment secrets
+        env:
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$EC2_SSH_PRIVATE_KEY" || {
+            echo "Missing Actions secret EC2_SSH_PRIVATE_KEY"
+            exit 1
+          }
+          test -n "$FIREBASE_SERVICE_ACCOUNT_JSON" || {
+            echo "Missing Actions secret FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          }
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" | python -c 'import json,sys; json.load(sys.stdin)'
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ec2-key-check"
+          chmod 600 "$RUNNER_TEMP/ec2-key-check"
+          ssh-keygen -y -f "$RUNNER_TEMP/ec2-key-check" >/dev/null
+          rm -f "$RUNNER_TEMP/ec2-key-check"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE_REF }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Configure SSH
+        env:
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          install -m 600 deploy/known_hosts "$RUNNER_TEMP/ec2-known-hosts"
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ec2-deploy-key"
+          chmod 600 "$RUNNER_TEMP/ec2-deploy-key"
+          {
+            echo "EC2_KEY_PATH=$RUNNER_TEMP/ec2-deploy-key"
+            echo "EC2_KNOWN_HOSTS=$RUNNER_TEMP/ec2-known-hosts"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Docker on EC2
+        run: |
+          set -euo pipefail
+          ssh -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            "$EC2_USER@$EC2_HOST" \
+            'sudo dnf install -y docker && sudo systemctl enable --now docker && sudo usermod -aG docker ec2-user && sudo install -d -o ec2-user -g ec2-user -m 0755 /opt/chilli-plant-api'
+
+      - name: Install Firebase Admin credential on EC2
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" | ssh -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            "$EC2_USER@$EC2_HOST" \
+            'sudo install -d -o root -g root -m 0700 /opt/chilli-plant-api/secrets && sudo tee /opt/chilli-plant-api/secrets/firebase-service-account.json >/dev/null && sudo chown 10001:10001 /opt/chilli-plant-api/secrets/firebase-service-account.json && sudo chmod 0400 /opt/chilli-plant-api/secrets/firebase-service-account.json'
+
+      - name: Copy deployment configuration
+        run: |
+          set -euo pipefail
+          scp -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            deploy/Caddyfile scripts/deploy-ec2.sh \
+            "$EC2_USER@$EC2_HOST:/tmp/"
+          ssh -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            "$EC2_USER@$EC2_HOST" \
+            'install -m 0644 /tmp/Caddyfile /opt/chilli-plant-api/Caddyfile && install -m 0755 /tmp/deploy-ec2.sh /opt/chilli-plant-api/deploy-ec2.sh'
+
+      - name: Log in to GHCR on EC2
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | ssh -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            "$EC2_USER@$EC2_HOST" \
+            "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
+
+      - name: Deploy containers
+        run: |
+          set -euo pipefail
+          ALLOWED_ORIGINS_B64="$(printf '%s' "$ALLOWED_ORIGINS" | base64 -w0)"
+          ssh -i "$EC2_KEY_PATH" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$EC2_KNOWN_HOSTS" \
+            "$EC2_USER@$EC2_HOST" \
+            "IMAGE_REF='$IMAGE_REF' ALLOWED_ORIGINS_B64='$ALLOWED_ORIGINS_B64' bash /opt/chilli-plant-api/deploy-ec2.sh"
+
+      - name: Check public HTTPS endpoint
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error --max-time 10 \
+              "https://$EC2_HOST/health" > "$RUNNER_TEMP/health.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "HTTPS health check failed. Confirm EC2 inbound TCP ports 80 and 443 are open."
+              exit 1
+            fi
+            sleep 5
+          done
+          python - "$RUNNER_TEMP/health.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          health = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          print(json.dumps(health, indent=2))
+          if not health.get("disease_model_ready") or not health.get("firebase_ready"):
+              raise SystemExit("The API is up, but the disease model or Firebase Admin is not ready.")
+          if not health.get("validator_ready"):
+              print("Warning: the separate chilli validator model is not configured; analyze/validate endpoints will return 503.")
+          PY

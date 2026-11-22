@@ -1,0 +1,11 @@
+16.178.139.98 {
+	tls {
+		issuer acme {
+			ca https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+		}
+	}
+
+	encode zstd gzip
+	reverse_proxy chilli-api:8000
+}

@@ -77,7 +77,7 @@ Flutter gets a Firebase ID token from the signed-in Firebase Auth user and attac
 flutter run --dart-define=API_BASE_URL=https://your-api.example.com
 ```
 
-Username login currently maps usernames to the legacy `@chilliapp.local` email alias to keep the existing sign-in screen. Do not expose Admin credentials in the Flutter app. Authentication, profile, prediction, results, and dashboard data are wired through `lib/services/`.
+The app uses Firebase email/password authentication and attaches the signed-in user's Firebase ID token to backend requests. Do not expose Firebase Admin credentials in the Flutter app. Authentication, profile, prediction, results, and dashboard data are wired through `lib/services/`.
 
 ## Tests
 
@@ -90,6 +90,24 @@ Tests use fake Firebase/model services and do not require production credentials
 
 ## Deployment
 
+### AWS EC2 with GitHub Actions
+
+`.github/workflows/deploy-ec2.yml` builds the Docker image, publishes it to GitHub Container Registry, then deploys the API and Caddy HTTPS proxy to the configured Amazon Linux 2023 instance when code is pushed to `main` (or when run manually). The API URL is `https://16.178.139.98`.
+
+Before the first workflow run:
+
+1. In the GitHub repository, open **Settings → Secrets and variables → Actions** and add these repository secrets:
+   - `EC2_SSH_PRIVATE_KEY`: the contents of the EC2 PEM key. Keep the PEM out of this repository and chat.
+   - `FIREBASE_SERVICE_ACCOUNT_JSON`: the service-account JSON for Firebase project `flutterchilli`.
+2. In the EC2 security group, allow inbound TCP 80 and 443 from clients. Keep SSH TCP 22 restricted to your own IP.
+3. Use an Elastic IP for the instance so the configured IP and certificate name stay stable.
+
+For a Flutter Web client, set the optional repository variable `ALLOWED_ORIGINS` to a comma-separated list of exact browser origins, including ports, such as `https://app.example.com,http://localhost:8080`.
+
+Caddy uses a short-lived Let's Encrypt IP certificate and renews it automatically. The health check also requires Firebase Admin and the bundled disease model to load. This instance is a `t3.micro` with about 1 GB RAM; the TensorFlow runtime has not been measured at that size, so use at least a 2 GB instance if the model container is killed or becomes unstable.
+
+The repository contains the six-class disease model, but no separate chilli-versus-other-plant validator model. Until `IMAGE_VALIDATION_MODEL_PATH` is configured with that validator, `/predictions/validate` and `/predictions/analyze` intentionally return HTTP 503, and health reports the service as degraded.
+
 ### Docker and Render
 
 The included Dockerfile packages the actual TFLite classifier and labels. Build and run from this directory:
@@ -101,4 +119,4 @@ docker run --rm -p 10000:10000 --env-file .env chilli-plant-api
 
 For Render, connect `dulnaju73-collab/chilli_plant_backend` as a **Docker** web service. The repository root is the service root and the Dockerfile is `./Dockerfile`; `render.yaml` records the Blueprint configuration and `/api/v1/health` health-check path. Set `FIREBASE_SERVICE_ACCOUNT_JSON` as a Render secret. The current Blueprint uses `1c-2g` because TensorFlow's actual runtime memory has not yet been measured and the 512 MB starter tier is not a safe assumption; measure container peak RSS before choosing a smaller plan. The `1c-2g` plan is a paid 1 CPU / 2 GB option. The deploy is not scan-ready without a separately trained chilli validator model; `IMAGE_VALIDATION_MODEL_PATH` must point to that file and the validator must pass real held-out chilli and non-chilli images. This repository does not contain that model.
 
-This environment does not include Docker/Podman, Firebase Admin credentials, a Render account integration, or GitHub authorization for the requested account. Therefore a container image build, live Firebase calls, and a live Render deployment cannot be claimed from this checkout. Keep one worker initially; each worker loads its own model. The in-memory rate limiter is per process; use a shared store or gateway if scaling to multiple workers. Configure Firestore indexes and CORS before rollout. Do not serve prediction traffic until `/api/v1/health` reports disease model, validator, and Firebase readiness as true and the actual model preprocessing has been verified.
+Keep one worker initially; each worker loads its own model. The in-memory rate limiter is per process; use a shared store or gateway if scaling to multiple workers. Configure Firestore indexes and CORS before rollout. Do not serve prediction traffic until `/api/v1/health` reports disease model, validator, and Firebase readiness as true and the actual model preprocessing has been verified.
