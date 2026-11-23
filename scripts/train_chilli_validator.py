@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import random
+import shutil
 import sys
 import time
 from collections import defaultdict
@@ -479,18 +480,22 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
     ]
     model.fit(train_ds, validation_data=val_ds, epochs=10, class_weight=class_weight, callbacks=callbacks, verbose=2)
 
-    # Export FP16-weighted TFLite with fixed [1, 160, 160, 3] FLOAT32 input & [1, 2] FLOAT32 output
+    # Export via Keras 3 SavedModel -> TFLiteConverter.from_saved_model so all weights are frozen
+    # (avoids unfrozen READ_VARIABLE ops from from_concrete_functions under Keras 3) and locks
+    # static input shape [1, 160, 160, 3] FLOAT32 -> [1, 2] FLOAT32.
     print(f"Exporting TFLite model to {output_path}...", flush=True)
+    export_input = tf.keras.Input(batch_shape=(1, IMG_SIZE, IMG_SIZE, 3), dtype="float32", name="rgb_0_1")
+    export_model = tf.keras.Model(export_input, model(export_input, training=False), name="chilli_leaf_validator_export")
+    saved_model_dir = cache_dir / "saved_model_export"
+    shutil.rmtree(saved_model_dir, ignore_errors=True)
+    export_model.export(str(saved_model_dir))
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=[1, IMG_SIZE, IMG_SIZE, 3], dtype=tf.float32, name="rgb_0_1")])
-    def serve(image_batch: tf.Tensor) -> tf.Tensor:
-        return model(image_batch, training=False)
-
-    concrete_fn = serve.get_concrete_function()
-    converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_fn], model)
+    converter = tf.lite.TFLiteConverter.from_saved_model(str(saved_model_dir))
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.target_spec.supported_types = [tf.float16]
     tflite_bytes = converter.convert()
+    if len(tflite_bytes) < 1_000_000:
+        raise RuntimeError(f"Exported TFLite model is unexpectedly small ({len(tflite_bytes)} bytes); weights may not be frozen.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(tflite_bytes)
     sha256 = hashlib.sha256(tflite_bytes).hexdigest()
