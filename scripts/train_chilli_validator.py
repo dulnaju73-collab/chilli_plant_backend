@@ -1,8 +1,8 @@
-"""Train, evaluate, and export the dedicated chilli-vs-non-chilli TFLite validator.
+"""Train, evaluate, and export the plant & chilli leaf vs. non-leaf TFLite validator.
 
 Outputs a compact FP16-weighted TFLite classifier (FLOAT32 input/output):
   - Input:  [1, 160, 160, 3] float32 RGB normalized to [0, 1] (IMAGE_VALIDATION_INPUT_SCALE=0_1)
-  - Output: [1, 2] float32 softmax probabilities [P(not_chilli), P(chilli_leaf)]
+  - Output: [1, 2] float32 softmax probabilities [P(not_leaf), P(leaf)]
             (IMAGE_VALIDATION_POSITIVE_CLASS_INDEX=1, IMAGE_VALIDATION_INVERT_SCORE=false)
 """
 
@@ -37,6 +37,18 @@ CALTECH_EXCLUDED_LABELS = {
     "strawberry",
     "sunflower",
     "water_lilly",
+}
+
+TINY_IMAGENET_EXCLUDED_LABELS = {
+    "n02226429",  # grasshopper (often photographed on green leaves)
+    "n07715103",  # cauliflower
+    "n07720875",  # bell pepper
+    "n07749582",  # lemon
+    "n07753592",  # banana
+    "n07768694",  # pomegranate
+    "n12267677",  # acorn
+    "n13001041",  # mushroom
+    "n14991210",  # orange
 }
 
 
@@ -209,10 +221,10 @@ def _stream_balanced(
 
 
 def _generate_synthetic_negatives(cache_dir: Path, rng: random.Random) -> dict[str, int]:
-    """Generate solid colors (incl. greens), gradients, noise, and geometric patterns as non-chilli negatives."""
+    """Generate solid colors (incl. greens), gradients, noise, and geometric patterns as non-leaf negatives."""
     np_rng = np.random.default_rng(SEED)
     counts = {"train": 0, "val": 0, "test": 0}
-    specs = [("train", 70), ("val", 20), ("test", 30)]
+    specs = [("train", 150), ("val", 40), ("test", 50)]
 
     for split, n in specs:
         for i in range(n):
@@ -228,7 +240,7 @@ def _generate_synthetic_negatives(cache_dir: Path, rng: random.Random) -> dict[s
                 color = np_rng.integers(0, 256, size=3, dtype=np.uint8)
                 arr = np.broadcast_to(color, (IMG_SIZE, IMG_SIZE, 3)).copy()
             elif mode == 2:
-                # Random Gaussian / uniform noise
+                # Random uniform noise
                 arr = np_rng.integers(0, 256, size=(IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8)
             elif mode == 3:
                 # Smooth gradients (including green gradients)
@@ -246,7 +258,7 @@ def _generate_synthetic_negatives(cache_dir: Path, rng: random.Random) -> dict[s
                 yy, xx = np.indices((IMG_SIZE, IMG_SIZE))
                 mask = ((yy // step) + (xx // step)) % 2 == 0
                 arr = np.where(mask[:, :, None], c1, c2).astype(np.uint8)
-            dest = cache_dir / split / "0_not_chilli" / f"synth_{i:05d}.jpg"
+            dest = cache_dir / split / "0_not_leaf" / f"synth_{i:05d}.jpg"
             dest.parent.mkdir(parents=True, exist_ok=True)
             Image.fromarray(arr, mode="RGB").save(dest, format="JPEG", quality=92)
             counts[split] += 1
@@ -254,37 +266,26 @@ def _generate_synthetic_negatives(cache_dir: Path, rng: random.Random) -> dict[s
 
 
 def prepare_dataset(cache_dir: Path) -> None:
-    marker = cache_dir / ".prepared_v1.json"
+    marker = cache_dir / ".prepared_v2_leaf.json"
     if marker.exists():
         print(f"Using cached dataset at {cache_dir} ({marker.read_text(encoding='utf-8')})", flush=True)
         return
 
     rng = random.Random(SEED)
     summary: dict[str, dict[str, int]] = {}
-    print("Downloading and caching balanced chilli + negative images...", flush=True)
+    print("Downloading and caching balanced leaf (incl. chilli) + non-leaf images...", flush=True)
 
-    # --- POSITIVES (class 1: chilli_leaf) ---
-    cold = _stream_balanced(
-        "Project-AgML/COLD_chili_leaf_disease_classification",
-        "train",
-        "label",
-        max_total=532,
-        max_per_class=200,
-        max_scan=600,
-        config_name="raw",
-    )
-    summary["pos_cold"] = _save_split_items(cold, cache_dir, "1_chilli_leaf", "cold", 330, 80, 122, rng)
-
+    # --- POSITIVES (class 1: plant & chilli leaves across field, phone, Google, and lab domains) ---
     cpv = _stream_balanced(
         "Project-AgML/chili_pepper_virus_classification",
         "train",
         "label",
-        max_total=1500,
-        max_per_class=600,
+        max_total=1050,
+        max_per_class=400,
         group_col="source_photo",
         max_scan=4200,
     )
-    summary["pos_cpv"] = _save_split_items(cpv, cache_dir, "1_chilli_leaf", "cpv", 1000, 220, 220, rng, group_split=True)
+    summary["pos_cpv"] = _save_split_items(cpv, cache_dir, "1_leaf", "cpv", 700, 150, 150, rng, group_split=True)
 
     waruni = _stream_balanced(
         "WaruniSHA/chilli-diseases",
@@ -294,15 +295,72 @@ def prepare_dataset(cache_dir: Path) -> None:
         exclude_exact={"others"},
         max_scan=1200,
     )
-    summary["pos_waruni"] = _save_split_items(waruni, cache_dir, "1_chilli_leaf", "waruni", 650, 150, 150, rng)
+    summary["pos_waruni"] = _save_split_items(waruni, cache_dir, "1_leaf", "waruni", 650, 150, 150, rng)
 
-    # --- NEGATIVES Group A: Non-plant everyday photos (dogs, cats, people, objects, scenes) ---
-    pets_tr = _stream_balanced("timm/oxford-iiit-pet", "train", "label", max_total=620, max_scan=5000)
-    summary["neg_pets_tr"] = _save_split_items(pets_tr, cache_dir, "0_not_chilli", "pets", 500, 120, 0, rng)
-    pets_te = _stream_balanced("timm/oxford-iiit-pet", "test", "label", max_total=180, max_scan=4000)
+    plantdoc = _stream_balanced(
+        "Project-AgML/plant_doc_classification",
+        "train",
+        "label",
+        max_total=660,
+        max_scan=3000,
+    )
+    summary["pos_plantdoc"] = _save_split_items(plantdoc, cache_dir, "1_leaf", "plantdoc", 450, 100, 100, rng)
+
+    for split_src, split_dst, limit in (("train", "train", 380), ("validation", "val", 100), ("test", "test", 100)):
+        beans = _stream_balanced("AI-Lab-Makerere/beans", split_src, "labels", max_total=limit, max_scan=1500)
+        cnt = 0
+        for idx, (img, _) in enumerate(beans):
+            if _save_rgb_jpeg(img, cache_dir / split_dst / "1_leaf" / f"beans_{idx:05d}.jpg"):
+                cnt += 1
+        summary.setdefault("pos_beans", {})[split_dst] = cnt
+
+    pv_tr = _stream_balanced(
+        "BrandonFors/Plant-Diseases-PlantVillage-Dataset",
+        "train",
+        "label",
+        max_total=490,
+        max_scan=45000,
+    )
+    summary["pos_pv_tr"] = _save_split_items(pv_tr, cache_dir, "1_leaf", "plantvillage", 400, 80, 0, rng)
+    pv_te = _stream_balanced(
+        "BrandonFors/Plant-Diseases-PlantVillage-Dataset",
+        "test",
+        "label",
+        max_total=100,
+        max_scan=12000,
+    )
+    cnt = 0
+    for idx, (img, _) in enumerate(pv_te):
+        if _save_rgb_jpeg(img, cache_dir / "test" / "1_leaf" / f"plantvillage_{idx:05d}.jpg"):
+            cnt += 1
+    summary["pos_pv_te"] = {"test": cnt}
+
+    tea = _stream_balanced("Project-AgML/tea_leaf_disease_classification", "train", "label", max_total=470, max_scan=6000)
+    summary["pos_tea"] = _save_split_items(tea, cache_dir, "1_leaf", "tea", 320, 70, 70, rng)
+
+    # 100% ZERO-SHOT EXTERNAL CHILLI LEAF TEST SET (never seen during training or validation!)
+    cold_zeroshot = _stream_balanced(
+        "Project-AgML/COLD_chili_leaf_disease_classification",
+        "train",
+        "label",
+        max_total=532,
+        max_per_class=200,
+        max_scan=600,
+        config_name="raw",
+    )
+    cnt = 0
+    for idx, (img, _) in enumerate(cold_zeroshot):
+        if _save_rgb_jpeg(img, cache_dir / "test" / "1_leaf" / f"cold_{idx:05d}.jpg"):
+            cnt += 1
+    summary["pos_cold_zeroshot"] = {"test": cnt}
+
+    # --- NEGATIVES (class 0: non-leaf / non-plant everyday photos + synthetic traps) ---
+    pets_tr = _stream_balanced("timm/oxford-iiit-pet", "train", "label", max_total=800, max_scan=5000)
+    summary["neg_pets_tr"] = _save_split_items(pets_tr, cache_dir, "0_not_leaf", "pets", 650, 140, 0, rng)
+    pets_te = _stream_balanced("timm/oxford-iiit-pet", "test", "label", max_total=200, max_scan=4000)
     cnt = 0
     for idx, (img, _) in enumerate(pets_te):
-        if _save_rgb_jpeg(img, cache_dir / "test" / "0_not_chilli" / f"pets_{idx:05d}.jpg"):
+        if _save_rgb_jpeg(img, cache_dir / "test" / "0_not_leaf" / f"pets_{idx:05d}.jpg"):
             cnt += 1
     summary["neg_pets_te"] = {"test": cnt}
 
@@ -310,59 +368,37 @@ def prepare_dataset(cache_dir: Path) -> None:
         "flwrlabs/caltech101",
         "train",
         "label",
-        max_total=750,
+        max_total=1020,
         exclude_exact=CALTECH_EXCLUDED_LABELS,
         max_scan=9500,
     )
-    summary["neg_caltech"] = _save_split_items(caltech, cache_dir, "0_not_chilli", "caltech", 500, 120, 130, rng)
+    summary["neg_caltech"] = _save_split_items(caltech, cache_dir, "0_not_leaf", "caltech", 700, 150, 160, rng)
 
-    imagenette = _stream_balanced("johnowhitaker/imagenette2-320", "train", "label", max_total=680, max_scan=14000)
-    summary["neg_imagenette"] = _save_split_items(imagenette, cache_dir, "0_not_chilli", "imagenette", 450, 110, 120, rng)
+    imagenette = _stream_balanced("johnowhitaker/imagenette2-320", "train", "label", max_total=1020, max_scan=14000)
+    summary["neg_imagenette"] = _save_split_items(imagenette, cache_dir, "0_not_leaf", "imagenette", 700, 150, 160, rng)
 
-    # --- NEGATIVES Group B: Other plant leaves (hard negatives) ---
-    for split_src, split_dst, limit in (("train", "train", 380), ("validation", "val", 100), ("test", "test", 100)):
-        beans = _stream_balanced("AI-Lab-Makerere/beans", split_src, "labels", max_total=limit, max_scan=1500)
-        cnt = 0
-        for idx, (img, _) in enumerate(beans):
-            if _save_rgb_jpeg(img, cache_dir / split_dst / "0_not_chilli" / f"beans_{idx:05d}.jpg"):
-                cnt += 1
-        summary.setdefault("neg_beans", {})[split_dst] = cnt
-
-    plantdoc = _stream_balanced(
-        "Project-AgML/plant_doc_classification",
+    tiny_tr = _stream_balanced(
+        "zh-plus/tiny-imagenet",
         "train",
         "label",
-        max_total=620,
-        exclude_substrings=("pepper", "chilli", "chili"),
-        max_scan=3000,
+        max_total=1040,
+        exclude_exact=TINY_IMAGENET_EXCLUDED_LABELS,
+        max_scan=100000,
     )
-    summary["neg_plantdoc"] = _save_split_items(plantdoc, cache_dir, "0_not_chilli", "plantdoc", 420, 100, 100, rng)
-
-    pv_tr = _stream_balanced(
-        "BrandonFors/Plant-Diseases-PlantVillage-Dataset",
-        "train",
+    summary["neg_tiny_tr"] = _save_split_items(tiny_tr, cache_dir, "0_not_leaf", "tinyimg", 850, 180, 0, rng)
+    tiny_te = _stream_balanced(
+        "zh-plus/tiny-imagenet",
+        "valid",
         "label",
-        max_total=520,
-        exclude_substrings=("pepper", "chilli", "chili"),
-        max_scan=45000,
-    )
-    summary["neg_pv_tr"] = _save_split_items(pv_tr, cache_dir, "0_not_chilli", "plantvillage", 420, 100, 0, rng)
-    pv_te = _stream_balanced(
-        "BrandonFors/Plant-Diseases-PlantVillage-Dataset",
-        "test",
-        "label",
-        max_total=120,
-        exclude_substrings=("pepper", "chilli", "chili"),
-        max_scan=12000,
+        max_total=180,
+        exclude_exact=TINY_IMAGENET_EXCLUDED_LABELS,
+        max_scan=10000,
     )
     cnt = 0
-    for idx, (img, _) in enumerate(pv_te):
-        if _save_rgb_jpeg(img, cache_dir / "test" / "0_not_chilli" / f"plantvillage_{idx:05d}.jpg"):
+    for idx, (img, _) in enumerate(tiny_te):
+        if _save_rgb_jpeg(img, cache_dir / "test" / "0_not_leaf" / f"tinyimg_{idx:05d}.jpg"):
             cnt += 1
-    summary["neg_pv_te"] = {"test": cnt}
-
-    tea = _stream_balanced("Project-AgML/tea_leaf_disease_classification", "train", "label", max_total=460, max_scan=6000)
-    summary["neg_tea"] = _save_split_items(tea, cache_dir, "0_not_chilli", "tea", 300, 80, 80, rng)
+    summary["neg_tiny_te"] = {"test": cnt}
 
     summary["neg_synth"] = _generate_synthetic_negatives(cache_dir, rng)
 
@@ -372,7 +408,7 @@ def prepare_dataset(cache_dir: Path) -> None:
 
 def _load_split_arrays(split_dir: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
     paths_and_labels: list[tuple[Path, int]] = []
-    for cls_idx, cls_name in ((0, "0_not_chilli"), (1, "1_chilli_leaf")):
+    for cls_idx, cls_name in ((0, "0_not_leaf"), (1, "1_leaf")):
         folder = split_dir / cls_name
         if not folder.exists():
             continue
@@ -417,14 +453,15 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
         image = tf.image.random_flip_up_down(image)
         k = tf.random.uniform([], minval=0, maxval=4, dtype=tf.int32)
         image = tf.image.rot90(image, k=k)
-        # Random zoom/crop (75% - 100%)
-        crop_frac = tf.random.uniform([], minval=0.75, maxval=1.0)
+        # Random zoom/crop (65% - 100%) to handle varied phone framing
+        crop_frac = tf.random.uniform([], minval=0.65, maxval=1.0)
         crop_size = tf.cast(tf.round(crop_frac * IMG_SIZE), tf.int32)
         image = tf.image.random_crop(image, size=[crop_size, crop_size, 3])
         image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE], method="bilinear")
-        image = tf.image.random_brightness(image, max_delta=0.18)
-        image = tf.image.random_contrast(image, lower=0.80, upper=1.20)
-        image = tf.image.random_saturation(image, lower=0.80, upper=1.20)
+        image = tf.image.random_brightness(image, max_delta=0.20)
+        image = tf.image.random_contrast(image, lower=0.75, upper=1.25)
+        image = tf.image.random_saturation(image, lower=0.75, upper=1.25)
+        image = tf.image.random_hue(image, max_delta=0.03)
         image = tf.clip_by_value(image, 0.0, 1.0)
         return image, label
 
@@ -454,12 +491,12 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
     outputs = tf.keras.layers.Dense(2, activation="softmax", name="chilli_probs")(x)
     model = tf.keras.Model(inputs, outputs, name="chilli_leaf_validator")
 
-    # Compute balanced class weights (slightly favoring rejecting non-chilli to reduce false accepts)
+    # Balanced class weights (avoid biasing against real-world leaf photos)
     n_neg = float((y_train == 0).sum())
     n_pos = float((y_train == 1).sum())
     total = n_neg + n_pos
-    class_weight = {0: (total / (2.0 * n_neg)) * 1.15, 1: total / (2.0 * n_pos)}
-    loss_fn = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.05)
+    class_weight = {0: total / (2.0 * n_neg), 1: total / (2.0 * n_pos)}
+    loss_fn = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.03)
 
     print("Phase 1: Training classification head (frozen MobileNetV2 alpha=0.75)...", flush=True)
     model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=loss_fn, metrics=["accuracy"])
@@ -504,10 +541,10 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
     # End-to-end evaluation through production ChilliImageValidator
     from app.models.chilli_validator import ChilliImageValidator
 
-    validator = ChilliImageValidator(output_path, positive_class_index=1, threshold=0.70, invert_score=False, input_scale="0_1")
+    validator = ChilliImageValidator(output_path, positive_class_index=1, threshold=0.55, invert_score=False, input_scale="0_1")
     scores = np.empty(len(x_test), dtype=np.float32)
     for i, name in enumerate(test_names):
-        cls_dir = "1_chilli_leaf" if y_test[i] == 1 else "0_not_chilli"
+        cls_dir = "1_leaf" if y_test[i] == 1 else "0_not_leaf"
         with Image.open(cache_dir / "test" / cls_dir / name) as im:
             _, score = validator.validate(im.convert("RGB"))
             scores[i] = score
@@ -516,7 +553,7 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
     print(f"\n=== TFLite Held-Out Test Evaluation (n={len(y_test)}, ROC-AUC={auc:.4f}) ===", flush=True)
 
     threshold_metrics = {}
-    for thr in (0.50, 0.60, 0.70, 0.80, 0.85):
+    for thr in (0.45, 0.50, 0.55, 0.65, 0.75):
         preds = (scores >= thr).astype(np.int32)
         tp = int(((preds == 1) & (y_test == 1)).sum())
         fn = int(((preds == 0) & (y_test == 1)).sum())
@@ -527,9 +564,9 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
         precision = tp / max(1, tp + fp)
         acc = (tp + tn) / max(1, len(y_test))
         threshold_metrics[f"{thr:.2f}"] = dict(accuracy=round(acc, 4), recall=round(recall, 4), precision=round(precision, 4), false_accept_rate=round(far, 4), tp=tp, fn=fn, fp=fp, tn=tn)
-        print(f"  thr={thr:.2f} | acc={acc:.4f} | chilli_recall={recall:.4f} ({tp}/{tp+fn}) | precision={precision:.4f} | non_chilli_FAR={far:.4f} ({fp}/{fp+tn})", flush=True)
+        print(f"  thr={thr:.2f} | acc={acc:.4f} | leaf_recall={recall:.4f} ({tp}/{tp+fn}) | precision={precision:.4f} | non_leaf_FAR={far:.4f} ({fp}/{fp+tn})", flush=True)
 
-    print("\n=== Per-Source Breakdown at threshold=0.70 ===", flush=True)
+    print("\n=== Per-Source Breakdown at threshold=0.55 (POS:cold is 100% zero-shot unseen chilli leaves) ===", flush=True)
     by_src: dict[str, list[tuple[int, float]]] = defaultdict(list)
     for name, lbl, sc in zip(test_names, y_test, scores):
         src = name.split("_")[0]
@@ -540,11 +577,11 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
         rows = by_src[key]
         lbl = rows[0][0]
         sc_arr = np.array([r[1] for r in rows])
-        accepted = int((sc_arr >= 0.70).sum())
+        accepted = int((sc_arr >= 0.55).sum())
         rate = accepted / len(rows)
         status_label = "recall" if lbl == 1 else "false_accept"
-        source_metrics[key] = dict(count=len(rows), accepted_at_070=accepted, rate=round(rate, 4), mean_score=round(float(sc_arr.mean()), 4))
-        print(f"  {key:20s} | n={len(rows):3d} | {status_label}={rate*100:5.1f}% ({accepted}/{len(rows)}) | mean_p_chilli={sc_arr.mean():.3f}", flush=True)
+        source_metrics[key] = dict(count=len(rows), accepted_at_055=accepted, rate=round(rate, 4), mean_score=round(float(sc_arr.mean()), 4))
+        print(f"  {key:20s} | n={len(rows):3d} | {status_label}={rate*100:5.1f}% ({accepted}/{len(rows)}) | mean_p_leaf={sc_arr.mean():.3f}", flush=True)
 
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -558,30 +595,34 @@ def train_and_export(cache_dir: Path, output_path: Path, report_path: Path | Non
                     "input_scale": "0_1",
                     "positive_class_index": 1,
                     "invert_score": False,
+                    "recommended_threshold": 0.55,
                     "roc_auc": round(auc, 4),
                     "thresholds": threshold_metrics,
-                    "per_source_at_0_70": source_metrics,
+                    "per_source_at_0_55": source_metrics,
                 },
                 indent=2,
             ),
             encoding="utf-8",
         )
 
-    # Quality gate at production default threshold 0.70
-    m070 = threshold_metrics["0.70"]
+    # Strict quality gate at production default threshold 0.55, including zero-shot unseen chilli recall
+    m055 = threshold_metrics["0.55"]
+    cold_zeroshot_recall = source_metrics.get("POS:cold", {}).get("rate", 0.0)
     pets_far = source_metrics.get("NEG:pets", {}).get("rate", 0.0)
     synth_far = source_metrics.get("NEG:synth", {}).get("rate", 0.0)
     failures: list[str] = []
-    if auc < 0.95:
-        failures.append(f"ROC-AUC {auc:.4f} < 0.95")
-    if m070["recall"] < 0.85:
-        failures.append(f"Chilli recall {m070['recall']:.4f} < 0.85 at threshold 0.70")
-    if m070["false_accept_rate"] > 0.08:
-        failures.append(f"Non-chilli FAR {m070['false_accept_rate']:.4f} > 0.08 at threshold 0.70")
-    if pets_far > 0.03:
-        failures.append(f"Dogs/pets FAR {pets_far:.4f} > 0.03 at threshold 0.70")
-    if synth_far > 0.05:
-        failures.append(f"Synthetic/solid FAR {synth_far:.4f} > 0.05 at threshold 0.70")
+    if auc < 0.98:
+        failures.append(f"ROC-AUC {auc:.4f} < 0.98")
+    if cold_zeroshot_recall < 0.92:
+        failures.append(f"Zero-shot unseen chilli (COLD) recall {cold_zeroshot_recall:.4f} < 0.92 at threshold 0.55")
+    if m055["recall"] < 0.94:
+        failures.append(f"Overall leaf recall {m055['recall']:.4f} < 0.94 at threshold 0.55")
+    if m055["false_accept_rate"] > 0.03:
+        failures.append(f"Non-leaf FAR {m055['false_accept_rate']:.4f} > 0.03 at threshold 0.55")
+    if pets_far > 0.02:
+        failures.append(f"Dogs/pets FAR {pets_far:.4f} > 0.02 at threshold 0.55")
+    if synth_far > 0.02:
+        failures.append(f"Synthetic/solid FAR {synth_far:.4f} > 0.02 at threshold 0.55")
     if failures:
         raise SystemExit("Validator quality gate failed: " + "; ".join(failures))
     print("Validator quality gate PASSED.", flush=True)

@@ -35,7 +35,9 @@ jobs:
         id: check
         run: |
           set -euo pipefail
-          if [ ! -f models/leaf_detection.tflite ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "should_train=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f models/leaf_detection.tflite ]; then
             echo "should_train=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_retrain }}" = "true" ]; then
             echo "should_train=true" >> "$GITHUB_OUTPUT"
@@ -82,15 +84,15 @@ jobs:
           from PIL import Image
           from app.models.chilli_validator import ChilliImageValidator
 
-          validator = ChilliImageValidator(Path("models/leaf_detection.tflite"), positive_class_index=1, threshold=0.70, invert_score=False, input_scale="0_1")
+          validator = ChilliImageValidator(Path("models/leaf_detection.tflite"), positive_class_index=1, threshold=0.55, invert_score=False, input_scale="0_1")
           for label, img in [
               ("solid_green", Image.new("RGB", (256, 256), (30, 150, 40))),
               ("solid_white", Image.new("RGB", (256, 256), (255, 255, 255))),
               ("random_noise", Image.fromarray(np.random.default_rng(7).integers(0, 256, (256, 256, 3), dtype=np.uint8))),
           ]:
               valid, score = validator.validate(img)
-              print(f"smoke[{label}]: valid={valid}, p_chilli={score:.4f}")
-              assert not valid, f"Validator unexpectedly accepted synthetic non-chilli image: {label} (score={score:.4f})"
+              print(f"smoke[{label}]: valid={valid}, p_leaf={score:.4f}")
+              assert not valid, f"Validator unexpectedly accepted synthetic non-leaf image: {label} (score={score:.4f})"
           PY
 
       - name: Publish training report summary
@@ -104,20 +106,20 @@ jobs:
           python - "$RUNNER_TEMP/validator_report.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json, pathlib, sys
           r = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          print("## Chilli Leaf Validator Evaluation Report\n")
+          print("## Plant & Chilli Leaf Validator Evaluation Report\n")
           print(f"- **File size:** {r['size_bytes'] / 1e6:.2f} MB")
           print(f"- **SHA-256:** `{r['sha256']}`")
           print(f"- **ROC-AUC:** `{r['roc_auc']}`\n")
           print("### Threshold Metrics\n")
-          print("| Threshold | Accuracy | Chilli Recall | Precision | Non-Chilli FAR |")
+          print("| Threshold | Accuracy | Leaf Recall | Precision | Non-Leaf FAR |")
           print("| --- | --- | --- | --- | --- |")
           for thr, m in r["thresholds"].items():
               print(f"| {thr} | {m['accuracy']} | {m['recall']} | {m['precision']} | {m['false_accept_rate']} |")
-          print("\n### Per-Source Breakdown at Threshold 0.70\n")
-          print("| Source | Samples | Accepted | Rate | Mean P(chilli) |")
+          print("\n### Per-Source Breakdown at Threshold 0.55 (Note: POS:cold is 100% zero-shot unseen chilli leaves)\n")
+          print("| Source | Samples | Accepted | Rate | Mean P(leaf) |")
           print("| --- | --- | --- | --- | --- |")
-          for src, m in r["per_source_at_0_70"].items():
-              print(f"| {src} | {m['count']} | {m['accepted_at_070']} | {m['rate']*100:.1f}% | {m['mean_score']} |")
+          for src, m in r["per_source_at_0_55"].items():
+              print(f"| {src} | {m['count']} | {m['accepted_at_055']} | {m['rate']*100:.1f}% | {m['mean_score']} |")
           PY
 
       - name: Upload evaluation report artifact

@@ -29,7 +29,7 @@ services:
       - key: IMAGE_VALIDATION_POSITIVE_CLASS_INDEX
         value: "1"
       - key: IMAGE_VALIDATION_THRESHOLD
-        value: "0.70"
+        value: "0.55"
       - key: IMAGE_VALIDATION_INVERT_SCORE
         value: "false"
       - key: IMAGE_VALIDATION_INPUT_SCALE
