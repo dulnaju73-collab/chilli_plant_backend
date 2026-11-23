@@ -1,0 +1,144 @@
+name: Train Chilli Leaf Validator
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_retrain:
+        description: "Retrain even if models/leaf_detection.tflite already exists"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - scripts/train_chilli_validator.py
+      - .github/workflows/train-validator.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chilli-validator-training
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether training should run
+        id: check
+        run: |
+          set -euo pipefail
+          if [ ! -f models/leaf_detection.tflite ]; then
+            echo "should_train=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_retrain }}" = "true" ]; then
+            echo "should_train=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "models/leaf_detection.tflite already exists; skipping training."
+            echo "should_train=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python 3.11
+        if: steps.check.outputs.should_train == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install training and test dependencies
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-dev.txt \
+            "datasets<4" \
+            "scikit-learn>=1.5,<2"
+
+      - name: Train, evaluate, and export leaf_detection.tflite
+        if: steps.check.outputs.should_train == 'true'
+        env:
+          TF_CPP_MIN_LOG_LEVEL: "2"
+        run: |
+          set -euo pipefail
+          python scripts/train_chilli_validator.py \
+            --cache-dir "$RUNNER_TEMP/validator_data" \
+            --output models/leaf_detection.tflite \
+            --report "$RUNNER_TEMP/validator_report.json"
+
+      - name: Run backend test suite and smoke-check exported validator
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          set -euo pipefail
+          pytest -v
+          python - <<'PY'
+          from pathlib import Path
+          import numpy as np
+          from PIL import Image
+          from app.models.chilli_validator import ChilliImageValidator
+
+          validator = ChilliImageValidator(Path("models/leaf_detection.tflite"), positive_class_index=1, threshold=0.70, invert_score=False, input_scale="0_1")
+          for label, img in [
+              ("solid_green", Image.new("RGB", (256, 256), (30, 150, 40))),
+              ("solid_white", Image.new("RGB", (256, 256), (255, 255, 255))),
+              ("random_noise", Image.fromarray(np.random.default_rng(7).integers(0, 256, (256, 256, 3), dtype=np.uint8))),
+          ]:
+              valid, score = validator.validate(img)
+              print(f"smoke[{label}]: valid={valid}, p_chilli={score:.4f}")
+              assert not valid, f"Validator unexpectedly accepted synthetic non-chilli image: {label} (score={score:.4f})"
+          PY
+
+      - name: Publish training report summary
+        if: steps.check.outputs.should_train == 'true' && always()
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/validator_report.json" ]; then
+            echo "No validator report generated."
+            exit 0
+          fi
+          python - "$RUNNER_TEMP/validator_report.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib, sys
+          r = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          print("## Chilli Leaf Validator Evaluation Report\n")
+          print(f"- **File size:** {r['size_bytes'] / 1e6:.2f} MB")
+          print(f"- **SHA-256:** `{r['sha256']}`")
+          print(f"- **ROC-AUC:** `{r['roc_auc']}`\n")
+          print("### Threshold Metrics\n")
+          print("| Threshold | Accuracy | Chilli Recall | Precision | Non-Chilli FAR |")
+          print("| --- | --- | --- | --- | --- |")
+          for thr, m in r["thresholds"].items():
+              print(f"| {thr} | {m['accuracy']} | {m['recall']} | {m['precision']} | {m['false_accept_rate']} |")
+          print("\n### Per-Source Breakdown at Threshold 0.70\n")
+          print("| Source | Samples | Accepted | Rate | Mean P(chilli) |")
+          print("| --- | --- | --- | --- | --- |")
+          for src, m in r["per_source_at_0_70"].items():
+              print(f"| {src} | {m['count']} | {m['accepted_at_070']} | {m['rate']*100:.1f}% | {m['mean_score']} |")
+          PY
+
+      - name: Upload evaluation report artifact
+        if: steps.check.outputs.should_train == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chilli-validator-report
+          path: ${{ runner.temp }}/validator_report.json
+          if-no-files-found: ignore
+
+      - name: Commit and push models/leaf_detection.tflite
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add models/leaf_detection.tflite
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Add trained chilli leaf validator model"
+          git pull --rebase origin main
+          git push origin HEAD:main

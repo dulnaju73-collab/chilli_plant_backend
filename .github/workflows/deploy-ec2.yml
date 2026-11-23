@@ -3,6 +3,9 @@ name: Deploy Chilli API to EC2
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ["Train Chilli Leaf Validator"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -14,6 +17,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -24,11 +28,18 @@ jobs:
       EC2_USER: ec2-user
       FIREBASE_PROJECT_ID: flutterchilli
       ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
-      IMAGE_REF: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
     steps:
       - name: Check out backend
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+
+      - name: Resolve image tag
+        run: |
+          set -euo pipefail
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          echo "IMAGE_REF=ghcr.io/${{ github.repository }}:${COMMIT_SHA}" >> "$GITHUB_ENV"
 
       - name: Check deployment secrets
         env:
