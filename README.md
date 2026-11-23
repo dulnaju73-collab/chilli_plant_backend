@@ -92,7 +92,7 @@ Tests use fake Firebase/model services and do not require production credentials
 
 ### AWS EC2 with GitHub Actions
 
-`.github/workflows/deploy-ec2.yml` builds the Docker image, publishes it to GitHub Container Registry, then deploys the API and Caddy HTTPS proxy to the configured Amazon Linux 2023 instance when code is pushed to `main` (or when run manually). The API URL is `https://16.178.139.98`.
+`.github/workflows/deploy-ec2.yml` builds the Docker image, publishes it to GitHub Container Registry, then deploys the API and Caddy HTTPS proxy to the configured Amazon Linux 2023 instance when code is pushed to `main` (or when run manually). The API URL is `https://16.179.128.119`.
 
 Before the first workflow run:
 

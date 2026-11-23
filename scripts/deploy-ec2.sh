@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 APP_DIR=/opt/chilli-plant-api
 NETWORK=chilli-backend
-PUBLIC_HOST=16.178.139.98
+PUBLIC_HOST=16.179.128.119
 decode_b64() {
     printf '%s' "${1:-}" | base64 -d
 }

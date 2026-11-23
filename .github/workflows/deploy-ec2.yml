@@ -20,7 +20,7 @@ jobs:
       contents: read
       packages: write
     env:
-      EC2_HOST: 16.178.139.98
+      EC2_HOST: 16.179.128.119
       EC2_USER: ec2-user
       FIREBASE_PROJECT_ID: flutterchilli
       ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}

@@ -1,8 +1,8 @@
 {
-	default_sni 16.178.139.98
+	default_sni 16.179.128.119
 }
 
-16.178.139.98 {
+16.179.128.119 {
 	tls {
 		issuer acme https://acme-v02.api.letsencrypt.org/directory {
 			profile shortlived
