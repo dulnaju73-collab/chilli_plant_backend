@@ -9,13 +9,28 @@ PUBLIC_HOST=16.179.128.119
 decode_b64() {
     printf '%s' "${1:-}" | base64 -d
 }
-ALLOWED_ORIGINS="$(decode_b64 "${ALLOWED_ORIGINS_B64:-}")"
-IMAGE_VALIDATION_MODEL_PATH="$(decode_b64 "${IMAGE_VALIDATION_MODEL_PATH_B64:-}")"
-IMAGE_VALIDATION_REQUIRED="$(decode_b64 "${IMAGE_VALIDATION_REQUIRED_B64:-}")"
-IMAGE_VALIDATION_POSITIVE_CLASS_INDEX="$(decode_b64 "${IMAGE_VALIDATION_POSITIVE_CLASS_INDEX_B64:-}")"
-IMAGE_VALIDATION_THRESHOLD="$(decode_b64 "${IMAGE_VALIDATION_THRESHOLD_B64:-}")"
-IMAGE_VALIDATION_INVERT_SCORE="$(decode_b64 "${IMAGE_VALIDATION_INVERT_SCORE_B64:-}")"
-IMAGE_VALIDATION_INPUT_SCALE="$(decode_b64 "${IMAGE_VALIDATION_INPUT_SCALE_B64:-}")"
+trim_ws() {
+    local value="${1:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+ALLOWED_ORIGINS="$(trim_ws "$(decode_b64 "${ALLOWED_ORIGINS_B64:-}")")"
+IMAGE_VALIDATION_MODEL_PATH="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_MODEL_PATH_B64:-}")")"
+IMAGE_VALIDATION_MODEL_PATH="$(trim_ws "${IMAGE_VALIDATION_MODEL_PATH#IMAGE_VALIDATION_MODEL_PATH=}")"
+if [[ ${#IMAGE_VALIDATION_MODEL_PATH} -ge 2 && ( ( "$IMAGE_VALIDATION_MODEL_PATH" == \"*\" && "$IMAGE_VALIDATION_MODEL_PATH" == *\" ) || ( "$IMAGE_VALIDATION_MODEL_PATH" == \'*\' && "$IMAGE_VALIDATION_MODEL_PATH" == *\' ) ) ]]; then
+    IMAGE_VALIDATION_MODEL_PATH="$(trim_ws "${IMAGE_VALIDATION_MODEL_PATH:1:${#IMAGE_VALIDATION_MODEL_PATH}-2}")"
+fi
+if [[ "$IMAGE_VALIDATION_MODEL_PATH" == models/*.tflite ]]; then
+    IMAGE_VALIDATION_MODEL_PATH="/app/$IMAGE_VALIDATION_MODEL_PATH"
+elif [[ "$IMAGE_VALIDATION_MODEL_PATH" == ./models/*.tflite ]]; then
+    IMAGE_VALIDATION_MODEL_PATH="/app/${IMAGE_VALIDATION_MODEL_PATH#./}"
+fi
+IMAGE_VALIDATION_REQUIRED="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_REQUIRED_B64:-}")")"
+IMAGE_VALIDATION_POSITIVE_CLASS_INDEX="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_POSITIVE_CLASS_INDEX_B64:-}")")"
+IMAGE_VALIDATION_THRESHOLD="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_THRESHOLD_B64:-}")")"
+IMAGE_VALIDATION_INVERT_SCORE="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_INVERT_SCORE_B64:-}")")"
+IMAGE_VALIDATION_INPUT_SCALE="$(trim_ws "$(decode_b64 "${IMAGE_VALIDATION_INPUT_SCALE_B64:-}")")"
 
 cleanup_registry_login() {
     docker logout ghcr.io >/dev/null 2>&1 || true
@@ -30,7 +45,7 @@ if [[ -n "$IMAGE_VALIDATION_MODEL_PATH" ]]; then
     case "$IMAGE_VALIDATION_MODEL_PATH" in
         *".."*) echo "IMAGE_VALIDATION_MODEL_PATH must not contain '..'." >&2; exit 1 ;;
         /app/models/*.tflite) ;;
-        *) echo "IMAGE_VALIDATION_MODEL_PATH must point to a .tflite file under /app/models." >&2; exit 1 ;;
+        *) echo "IMAGE_VALIDATION_MODEL_PATH must be a container path under /app/models/*.tflite (e.g. /app/models/leaf_detection.tflite or models/leaf_detection.tflite), not a URL or other path." >&2; exit 1 ;;
     esac
     if docker run --rm --entrypoint python "$IMAGE_REF" \
         -c 'import pathlib, sys; sys.exit(0 if pathlib.Path(sys.argv[1]).is_file() else 1)' \
