@@ -285,21 +285,15 @@ def prepare_dataset(cache_dir: Path) -> None:
     )
     summary["pos_cpv"] = _save_split_items(cpv, cache_dir, "1_chilli_leaf", "cpv", 1000, 220, 220, rng, group_split=True)
 
-    # edgararya has native train/validation/test splits
-    for split_src, split_dst, limit in (("train", "train", 1000), ("validation", "val", 220), ("test", "test", 220)):
-        edgar = _stream_balanced(
-            "edgararya/chili_disease.v12i.multiclass",
-            split_src,
-            "label",
-            max_total=limit,
-            max_per_class=max(60, limit // 3),
-            max_scan=limit * 4,
-        )
-        cnt = 0
-        for idx, (img, _) in enumerate(edgar):
-            if _save_rgb_jpeg(img, cache_dir / split_dst / "1_chilli_leaf" / f"edgar_{idx:05d}.jpg"):
-                cnt += 1
-        summary.setdefault("pos_edgar", {})[split_dst] = cnt
+    waruni = _stream_balanced(
+        "WaruniSHA/chilli-diseases",
+        "train",
+        "label",
+        max_total=950,
+        exclude_exact={"others"},
+        max_scan=1200,
+    )
+    summary["pos_waruni"] = _save_split_items(waruni, cache_dir, "1_chilli_leaf", "waruni", 650, 150, 150, rng)
 
     # --- NEGATIVES Group A: Non-plant everyday photos (dogs, cats, people, objects, scenes) ---
     pets_tr = _stream_balanced("timm/oxford-iiit-pet", "train", "label", max_total=620, max_scan=5000)
@@ -366,8 +360,8 @@ def prepare_dataset(cache_dir: Path) -> None:
             cnt += 1
     summary["neg_pv_te"] = {"test": cnt}
 
-    tea = _stream_balanced("anupamavm/sri_lankan_tea_leaf_diseases", "train", "label", max_total=320, max_scan=800)
-    summary["neg_tea"] = _save_split_items(tea, cache_dir, "0_not_chilli", "tea", 200, 60, 60, rng)
+    tea = _stream_balanced("Project-AgML/tea_leaf_disease_classification", "train", "label", max_total=460, max_scan=6000)
+    summary["neg_tea"] = _save_split_items(tea, cache_dir, "0_not_chilli", "tea", 300, 80, 80, rng)
 
     summary["neg_synth"] = _generate_synthetic_negatives(cache_dir, rng)
 
