@@ -19,8 +19,6 @@ RUN python -m pip install --upgrade pip \
 
 COPY --chown=appuser:appuser app ./app
 COPY --chown=appuser:appuser models ./models
-RUN python -c "import hashlib; from pathlib import Path; from urllib.request import urlretrieve; p=Path('/app/models/leaf_detection.tflite'); urlretrieve('https://huggingface.co/kd8811/TeaLeafNet/resolve/52b6970b4e5592b8f97c956df495f1fa64358b39/leaf_detection.tflite', p); assert hashlib.sha256(p.read_bytes()).hexdigest() == '92dafe78f2c8a4b4cf1b4447a3a4007221a42b6d0bcb521620fe41a63362d42f'; p.chmod(0o644)" \
-    && chown appuser:appuser /app/models/leaf_detection.tflite
 COPY --chown=appuser:appuser main.py ./main.py
 
 USER appuser

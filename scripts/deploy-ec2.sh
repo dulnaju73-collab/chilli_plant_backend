@@ -6,8 +6,16 @@ set -Eeuo pipefail
 APP_DIR=/opt/chilli-plant-api
 NETWORK=chilli-backend
 PUBLIC_HOST=16.178.139.98
-ALLOWED_ORIGINS="$(printf '%s' "${ALLOWED_ORIGINS_B64:-}" | base64 -d)"
-IMAGE_VALIDATION_MODEL_PATH="$(printf '%s' "${IMAGE_VALIDATION_MODEL_PATH_B64:-}" | base64 -d)"
+decode_b64() {
+    printf '%s' "${1:-}" | base64 -d
+}
+ALLOWED_ORIGINS="$(decode_b64 "${ALLOWED_ORIGINS_B64:-}")"
+IMAGE_VALIDATION_MODEL_PATH="$(decode_b64 "${IMAGE_VALIDATION_MODEL_PATH_B64:-}")"
+IMAGE_VALIDATION_REQUIRED="$(decode_b64 "${IMAGE_VALIDATION_REQUIRED_B64:-}")"
+IMAGE_VALIDATION_POSITIVE_CLASS_INDEX="$(decode_b64 "${IMAGE_VALIDATION_POSITIVE_CLASS_INDEX_B64:-}")"
+IMAGE_VALIDATION_THRESHOLD="$(decode_b64 "${IMAGE_VALIDATION_THRESHOLD_B64:-}")"
+IMAGE_VALIDATION_INVERT_SCORE="$(decode_b64 "${IMAGE_VALIDATION_INVERT_SCORE_B64:-}")"
+IMAGE_VALIDATION_INPUT_SCALE="$(decode_b64 "${IMAGE_VALIDATION_INPUT_SCALE_B64:-}")"
 
 cleanup_registry_login() {
     docker logout ghcr.io >/dev/null 2>&1 || true
@@ -17,15 +25,47 @@ trap cleanup_registry_login EXIT
 docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK" >/dev/null
 docker pull "$IMAGE_REF"
 
+validator_model_exists=false
 if [[ -n "$IMAGE_VALIDATION_MODEL_PATH" ]]; then
     case "$IMAGE_VALIDATION_MODEL_PATH" in
+        *".."*) echo "IMAGE_VALIDATION_MODEL_PATH must not contain '..'." >&2; exit 1 ;;
         /app/models/*.tflite) ;;
         *) echo "IMAGE_VALIDATION_MODEL_PATH must point to a .tflite file under /app/models." >&2; exit 1 ;;
     esac
-    docker run --rm --entrypoint python "$IMAGE_REF" \
-        -c 'import pathlib, sys; p=pathlib.Path(sys.argv[1]); sys.exit(0 if p.is_file() else f"Validator model is missing from the image: {p}")' \
-        "$IMAGE_VALIDATION_MODEL_PATH"
+    if docker run --rm --entrypoint python "$IMAGE_REF" \
+        -c 'import pathlib, sys; sys.exit(0 if pathlib.Path(sys.argv[1]).is_file() else 1)' \
+        "$IMAGE_VALIDATION_MODEL_PATH"; then
+        validator_model_exists=true
+    fi
 fi
+
+validation_required_normalized="$(printf '%s' "$IMAGE_VALIDATION_REQUIRED" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+case "$validation_required_normalized" in
+    1|true|yes|on)
+        if [[ "$validator_model_exists" != "true" ]]; then
+            echo "IMAGE_VALIDATION_REQUIRED is enabled, but validator model is missing from the image: ${IMAGE_VALIDATION_MODEL_PATH:-<unset>}" >&2
+            exit 1
+        fi
+        effective_validation_required=true
+        ;;
+    0|false|no|off)
+        effective_validation_required=false
+        ;;
+    "")
+        if [[ "$validator_model_exists" == "true" ]]; then
+            effective_validation_required=true
+        else
+            if [[ -n "$IMAGE_VALIDATION_MODEL_PATH" ]]; then
+                echo "Warning: Validator model is not present in the image yet (${IMAGE_VALIDATION_MODEL_PATH}); deploying with IMAGE_VALIDATION_REQUIRED=false until the model file is added." >&2
+            fi
+            effective_validation_required=false
+        fi
+        ;;
+    *)
+        echo "Unsupported IMAGE_VALIDATION_REQUIRED value: $IMAGE_VALIDATION_REQUIRED" >&2
+        exit 1
+        ;;
+esac
 
 docker rm -f chilli-api >/dev/null 2>&1 || true
 api_env=(
@@ -34,11 +74,23 @@ api_env=(
     --env FIREBASE_SERVICE_ACCOUNT_PATH=/run/secrets/firebase-service-account.json
     --env MODEL_PATH=/app/models/chilli_leaf_disease_final.tflite
     --env LABELS_PATH=/app/models/class_names.json
-    --env IMAGE_VALIDATION_REQUIRED=false
+    --env "IMAGE_VALIDATION_REQUIRED=$effective_validation_required"
     --env "ALLOWED_ORIGINS=$ALLOWED_ORIGINS"
 )
-if [[ -n "$IMAGE_VALIDATION_MODEL_PATH" ]]; then
+if [[ "$validator_model_exists" == "true" ]]; then
     api_env+=(--env "IMAGE_VALIDATION_MODEL_PATH=$IMAGE_VALIDATION_MODEL_PATH")
+fi
+if [[ -n "$IMAGE_VALIDATION_POSITIVE_CLASS_INDEX" ]]; then
+    api_env+=(--env "IMAGE_VALIDATION_POSITIVE_CLASS_INDEX=$IMAGE_VALIDATION_POSITIVE_CLASS_INDEX")
+fi
+if [[ -n "$IMAGE_VALIDATION_THRESHOLD" ]]; then
+    api_env+=(--env "IMAGE_VALIDATION_THRESHOLD=$IMAGE_VALIDATION_THRESHOLD")
+fi
+if [[ -n "$IMAGE_VALIDATION_INVERT_SCORE" ]]; then
+    api_env+=(--env "IMAGE_VALIDATION_INVERT_SCORE=$IMAGE_VALIDATION_INVERT_SCORE")
+fi
+if [[ -n "$IMAGE_VALIDATION_INPUT_SCALE" ]]; then
+    api_env+=(--env "IMAGE_VALIDATION_INPUT_SCALE=$IMAGE_VALIDATION_INPUT_SCALE")
 fi
 docker run -d \
     --name chilli-api \

@@ -19,8 +19,8 @@ from app.dependencies import authentication
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(firebase, "initialize", lambda: None)
-    monkeypatch.setattr(main_module, "DiseaseClassifier", lambda *_: object())
-    monkeypatch.setattr(main_module, "ChilliImageValidator", lambda *_: object())
+    monkeypatch.setattr(main_module, "DiseaseClassifier", lambda *_, **__: object())
+    monkeypatch.setattr(main_module, "ChilliImageValidator", lambda *_, **__: object())
     main_module.app.dependency_overrides.clear()
     with TestClient(main_module.app) as test_client:
         yield test_client
@@ -235,12 +235,13 @@ def test_analyze_returns_model_confidence_and_persists_scan(client):
             return "Healthy_Leaf", 0.8562
 
     class Storage:
-        def save_scan(self, uid, disease, confidence, image_data, image_format, model_version):
+        def save_scan(self, uid, disease, confidence, image_data, image_format, model_version, validation_status="validated"):
             assert uid == "verified-user"
             assert disease == "Healthy_Leaf"
             assert confidence == pytest.approx(0.8562)
             assert image_format == "PNG"
-            return {"id": "server-created-id", "disease": disease, "confidence": 85.62, "is_healthy": True, "created_at": "2026-11-22T00:00:00Z", "validation_status": "validated"}
+            assert validation_status == "validated"
+            return {"id": "server-created-id", "disease": disease, "confidence": 85.62, "is_healthy": True, "created_at": "2026-11-22T00:00:00Z", "validation_status": validation_status}
 
     validator = Validator()
     predictions.configure_prediction_service(PredictionService(Classifier(), ImageValidationService(validator), Storage()))
@@ -249,6 +250,34 @@ def test_analyze_returns_model_confidence_and_persists_scan(client):
     assert response.status_code == 200
     assert response.json()["prediction"]["id"] == "server-created-id"
     assert response.json()["prediction"]["confidence"] == 85.62
+    assert response.json()["prediction"]["validation_status"] == "validated"
+
+
+def test_analyze_rejects_non_chilli_image_with_422_before_disease_inference(client):
+    from app.api.routes import predictions
+
+    called = {"classifier": 0, "storage": 0}
+
+    class Validator:
+        def validate(self, _):
+            return False, 0.12
+
+    class Classifier:
+        def predict(self, _):
+            called["classifier"] += 1
+            return "Healthy_Leaf", 0.99
+
+    class Storage:
+        def save_scan(self, *_args, **_kwargs):
+            called["storage"] += 1
+            return {}
+
+    predictions.configure_prediction_service(PredictionService(Classifier(), ImageValidationService(Validator()), Storage()))
+    main_module.app.dependency_overrides[current_user] = lambda: {"uid": "verified-user"}
+    response = client.post("/api/v1/predictions/analyze", files=_png_upload())
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_PLANT_IMAGE"
+    assert called == {"classifier": 0, "storage": 0}
 
 
 def test_missing_validator_is_reported_and_disease_model_is_not_run(client):

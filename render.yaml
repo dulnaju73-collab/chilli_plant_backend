@@ -22,6 +22,18 @@ services:
         value: /app/models/chilli_leaf_disease_final.tflite
       - key: LABELS_PATH
         value: /app/models/class_names.json
+      - key: IMAGE_VALIDATION_MODEL_PATH
+        value: /app/models/leaf_detection.tflite
+      - key: IMAGE_VALIDATION_REQUIRED
+        value: "false"
+      - key: IMAGE_VALIDATION_POSITIVE_CLASS_INDEX
+        value: "1"
+      - key: IMAGE_VALIDATION_THRESHOLD
+        value: "0.70"
+      - key: IMAGE_VALIDATION_INVERT_SCORE
+        value: "false"
+      - key: IMAGE_VALIDATION_INPUT_SCALE
+        value: 0_1
       - key: MAX_UPLOAD_SIZE_MB
         value: "10"
       - key: ALLOWED_ORIGINS

@@ -34,7 +34,13 @@ async def lifespan(app: FastAPI):
         logger.exception("Disease classifier could not be loaded")
     if settings.image_validation_required and settings.validator_model_path:
         try:
-            validator = ChilliImageValidator(settings.validator_model_path, settings.validator_positive_class_index, settings.validator_threshold)
+            validator = ChilliImageValidator(
+                settings.validator_model_path,
+                settings.validator_positive_class_index,
+                settings.validator_threshold,
+                invert_score=settings.validator_invert_score,
+                input_scale=settings.validator_input_scale,
+            )
             logger.info("Chilli validation model loaded: %s", settings.validator_model_path)
         except Exception:
             logger.exception("Chilli image validator could not be loaded")
@@ -74,6 +80,7 @@ def health() -> dict[str, Any]:
         "disease_model_ready": classifier is not None,
         "validator_ready": validator is not None,
         "image_validation_required": settings.image_validation_required,
+        "validator_model": settings.validator_model_path.name if validator and settings.validator_model_path else None,
         "firebase_ready": firebase.ready,
         "image_storage_enabled": firebase.storage_bucket is not None,
         "disease_model": settings.model_path.name,

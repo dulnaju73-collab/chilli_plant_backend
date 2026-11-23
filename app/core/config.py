@@ -38,6 +38,8 @@ class Settings:
     image_validation_required: bool = _bool_env("IMAGE_VALIDATION_REQUIRED", True)
     validator_positive_class_index: int = int(os.getenv("IMAGE_VALIDATION_POSITIVE_CLASS_INDEX", "1"))
     validator_threshold: float = float(os.getenv("IMAGE_VALIDATION_THRESHOLD", "0.70"))
+    validator_invert_score: bool = _bool_env("IMAGE_VALIDATION_INVERT_SCORE", False)
+    validator_input_scale: str = os.getenv("IMAGE_VALIDATION_INPUT_SCALE", "0_1").strip().lower()
     max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10")) * 1024 * 1024
     max_image_width: int = int(os.getenv("MAX_IMAGE_WIDTH", "8000"))
     max_image_height: int = int(os.getenv("MAX_IMAGE_HEIGHT", "8000"))
